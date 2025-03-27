@@ -1,0 +1,5 @@
+flask==2.3.3
+werkzeug==2.3.7
+python-dotenv==1.0.0
+google-generativeai==0.3.2
+psycopg2-binary==2.9.9 
