@@ -69,16 +69,16 @@ GOOGLE_AI_API_KEY=your_google_ai_api_key
 ```python
 from query_translator import QueryTranslator
 ```
-# Initialize the translator
+### Initialize the translator
 ```python
 translator = QueryTranslator()
 ```
-# Simple query
+### Simple query
 ```python
 result = translator.process_question("Show me all patients with diabetes")
 print(result["results"])
 ```
-# Complex query with conditions
+### Complex query with conditions
 ```python
 result = translator.process_question(
 "Find female patients over 65 with hypertension diagnosed in the last 5 years"
@@ -169,7 +169,7 @@ If you use this tool in your research, please cite:
 
 ```bibtex
 @software{fhir_query_translator,
-author = @narensham,
+author = narensham,
 title = {FHIR Database Query Translator},
 year = {2025},
 publisher = {GitHub},
