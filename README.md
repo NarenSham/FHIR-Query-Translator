@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
-A powerful Python tool that translates natural language questions into optimized SQL queries for FHIR (Fast Healthcare Interoperability Resources) databases. Leveraging Google's Gemini AI, this tool enables healthcare professionals and developers to query complex FHIR data structures using simple English questions.
+A Python tool that translates natural language questions into optimized SQL queries for FHIR (Fast Healthcare Interoperability Resources) databases. Leveraging Google's Gemini AI, this tool enables healthcare professionals and developers to query complex FHIR data structures using simple English questions.
 
 ## 🚀 Features
 
