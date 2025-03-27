@@ -69,12 +69,12 @@ GOOGLE_AI_API_KEY=your_google_ai_api_key
 ```python
 from query_translator import QueryTranslator
 ```
-Initialize the translator
+# Initialize the translator
 translator = QueryTranslator()
-Simple query
+# Simple query
 result = translator.process_question("Show me all patients with diabetes")
 print(result["results"])
-Complex query with conditions
+# Complex query with conditions
 result = translator.process_question(
 "Find female patients over 65 with hypertension diagnosed in the last 5 years"
 )
@@ -85,7 +85,7 @@ print(result["results"]) # View the query results
 
 ```python
 
-Custom database configuration
+# Custom database configuration
 config = {
 "host": "localhost",
 "port": 5432,
