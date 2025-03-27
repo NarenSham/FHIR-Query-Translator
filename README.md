@@ -70,17 +70,22 @@ GOOGLE_AI_API_KEY=your_google_ai_api_key
 from query_translator import QueryTranslator
 ```
 # Initialize the translator
+```python
 translator = QueryTranslator()
+```
 # Simple query
+```python
 result = translator.process_question("Show me all patients with diabetes")
 print(result["results"])
+```
 # Complex query with conditions
+```python
 result = translator.process_question(
 "Find female patients over 65 with hypertension diagnosed in the last 5 years"
 )
 print(result["sql"]) # View the generated SQL
 print(result["results"]) # View the query results
-
+```
 ### Advanced Features
 
 ```python
@@ -100,8 +105,9 @@ context_window=5 # Remember context from last 5 queries
 )
 ```
 ### Query with context
+```python
 translator.process_question("Show me their medication history") # Uses context from previous query
-
+```
 
 ## 📚 Example Queries
 
