@@ -7,11 +7,15 @@ import re
 
 class QueryTranslator:
     def __init__(self, db_config: Dict[str, str], api_key: str):
+        # Add debug logging for connection
+        print("Attempting to connect with config:", {
+            k: v for k, v in db_config.items() if k != 'password'
+        })
         self.db_config = db_config
         
         # Configure Gemini API
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('models/gemini-1.5-pro')  # Updated to use 1.5 version
+        self.model = genai.GenerativeModel('models/gemini-1.5-flash-8b-exp-0924')  # Using full model name with prefix
         
         # Updated schema information to include all tables
         self.schema_context = """
@@ -95,6 +99,48 @@ class QueryTranslator:
         - Timestamps should be handled using PostgreSQL timestamp functions
         """
         
+        # Add visualization type decision rules
+        self.visualization_rules = {
+            "comparison": {
+                "among_items": {
+                    "one_variable": ["bar_chart_vertical", "bar_chart_horizontal"],
+                    "two_variables": ["variable_width_column_chart", "table_with_charts"],
+                    "many_categories": ["table_with_charts"]
+                },
+                "over_time": {
+                    "few_categories": ["line_chart", "bar_chart_vertical"],
+                    "cyclical": ["circular_area_chart"],
+                    "non_cyclical": ["line_chart"]
+                }
+            },
+            "relationship": {
+                "two_variables": ["scatter_plot"],
+                "three_or_more": ["bubble_chart"]
+            },
+            "distribution": {
+                "few_points": ["bar_histogram"],
+                "many_points": ["line_histogram", "scatter_plot"]
+            },
+            "composition": {
+                "static": ["pie_chart"],
+                "changing_over_time": {
+                    "few_periods": {
+                        "relative_only": ["stacked_100_bar_chart"],
+                        "absolute_and_relative": ["stacked_bar_chart"]
+                    },
+                    "many_periods": {
+                        "relative_only": ["stacked_area_100_chart"],
+                        "absolute_and_relative": ["stacked_area_chart"]
+                    }
+                },
+                "accumulation": {
+                    "to_total": ["waterfall_chart"],
+                    "components": ["stacked_100_bar_subcomponents"],
+                    "difference_matters": ["tree_map"]
+                }
+            }
+        }
+        
     def generate_sql_query(self, user_question: str) -> str:
         """Convert natural language question to SQL query using Gemini"""
         
@@ -102,9 +148,18 @@ class QueryTranslator:
         jsonb_extraction_examples = """
         Instead of selecting JSONB columns directly, extract specific fields:
         
+        -- For patient names (FHIR format):
+        p.data->'name'->0->'given'->0->>'value' as given_name,
+        p.data->'name'->0->>'family' as family_name,
+        
+        -- For addresses (FHIR format):
+        p.data->'address'->0->>'city' as city,
+        p.data->'address'->0->>'state' as state,
+        p.data->'address'->0->>'postalCode' as postal_code,
+        p.data->'address'->0->>'line' as street_address,
+        
         -- For condition codes:
         c.code->>'code' as condition_code_value,
-        c.code->'coding'->0->>'display' as condition_display,
         
         -- For clinical status:
         c.clinical_status->>'coding' as clinical_status_value,
@@ -123,16 +178,6 @@ class QueryTranslator:
         -- For marital status:
         p.marital_status->'coding'->0->>'code' as marital_status_code,
         p.marital_status->'coding'->0->>'display' as marital_status_display
-        
-        -- For patient names:
-        p.data->'name'->0->'given'->0->>'value' as given_name,
-        p.data->'name'->0->>'family' as family_name,
-        
-        -- For addresses:
-        p.data->'address'->0->>'line' as address_line,
-        p.data->'address'->0->>'city' as city,
-        p.data->'address'->0->>'state' as state,
-        p.data->'address'->0->>'postalCode' as postal_code
         """
 
         prompt = f"""
@@ -144,21 +189,30 @@ class QueryTranslator:
         2. Use -> for navigating through JSON objects and arrays
         3. Use ->> only for final text extraction
         4. For JSONB fields, extract meaningful values using proper JSON paths
+        5. For addresses, use p.data->'address'->0->>'city' to get city
+        6. For patient counts by location, group by the extracted city field
         
         {jsonb_extraction_examples}
         
-        Example correct query:
+        Example correct queries:
+        
+        -- Query for patient count by city:
         SELECT 
-            p.id as patient_id,
-            p.gender,
-            p.birth_date,
-            p.marital_status->'coding'->0->>'display' as marital_status,
-            c.code->'coding'->0->>'display' as condition_name,
-            c.clinical_status->>'code' as clinical_status,
-            e.class->>'code' as encounter_class
+            p.data->'address'->0->>'city' as city,
+            COUNT(*) as patient_count
         FROM patients p
-        LEFT JOIN encounters e ON p.id = e.patient_id
-        LEFT JOIN conditions c ON p.id = c.patient_id;
+        WHERE p.data->'address'->0->>'city' IS NOT NULL
+        GROUP BY p.data->'address'->0->>'city'
+        ORDER BY patient_count DESC;
+        
+        -- Query for patients in a specific city:
+        SELECT 
+            p.id,
+            p.data->'name'->0->'given'->0->>'value' as given_name,
+            p.data->'name'->0->>'family' as family_name,
+            p.data->'address'->0->>'city' as city
+        FROM patients p
+        WHERE p.data->'address'->0->>'city' = 'Boston';
         
         Convert this question into a SQL query:
         "{user_question}"
@@ -174,65 +228,14 @@ class QueryTranslator:
         sql_query = response.text.strip()
         sql_query = sql_query.replace('```sql', '').replace('```', '').strip()
         
-        # Enhanced validation and correction of JSON paths
-        def fix_json_path(query):
-            # Common incorrect patterns and their corrections
-            replacements = [
-                # Fix incorrect name access patterns
-                (r"data->>'name'->", r"data->'name'->"),
-                (r"data->>'name'\s*->", r"data->'name'->"),
-                (r"->>'given'->", r"->'given'->"),
-                (r"->>'given'\s*->", r"->'given'->"),
-                # Fix incorrect array access
-                (r"'name'->>\d+", r"'name'->\0"),
-                (r"'given'->>\d+", r"'given'->\0"),
-                # Fix incorrect address access
-                (r"data->>'address'->", r"data->'address'->"),
-                (r"data->>'address'\s*->", r"data->'address'->"),
-                # Fix incorrect array indexing
-                (r"->>\d+->", r"->\0->"),
-                (r"->>\d+\s*->", r"->\0->"),
-            ]
-            
-            # Apply all replacements
-            fixed_query = query
-            for pattern, replacement in replacements:
-                fixed_query = re.sub(pattern, replacement, fixed_query)
-            
-            # Ensure proper FHIR name search pattern
-            if "WHERE" in fixed_query and "name" in fixed_query and "LIKE" in fixed_query:
-                # Check if we need to convert to EXISTS clause
-                if not "EXISTS" in fixed_query and ("data->'name'" in fixed_query or "data->>'name'" in fixed_query):
-                    # Extract the name search condition
-                    match = re.search(r"WHERE.*?(data.*?LIKE\s*'[^']*')", fixed_query, re.IGNORECASE)
-                    if match:
-                        old_condition = match.group(1)
-                        new_condition = f"""
-                        EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(data->'name') n,
-                                 jsonb_array_elements(n->'given') g
-                            WHERE g->>'value' LIKE {old_condition.split("LIKE")[1].strip()}
-                        )"""
-                        fixed_query = fixed_query.replace(old_condition, new_condition)
-            
-            return fixed_query
-        
-        # Apply the fixes
-        sql_query = fix_json_path(sql_query)
-        
-        # Validate the query still has essential components
-        if not all(keyword in sql_query.upper() for keyword in ['SELECT', 'FROM']):
-            raise ValueError("Generated SQL query is missing essential components")
-        
         return sql_query
     
-    def execute_query(self, sql_query: str) -> list:
+    def execute_query(self, sql_query: str, params: tuple = ()) -> list:
         """Execute the generated SQL query and return results"""
         try:
             conn = psycopg2.connect(**self.db_config)
             cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute(sql_query)
+            cur.execute(sql_query, params)  # Use parameterized query
             results = cur.fetchall()
             cur.close()
             conn.close()
@@ -240,16 +243,122 @@ class QueryTranslator:
         except Exception as e:
             return [{"error": str(e)}]
     
+    def determine_visualization(self, results: list, sql_query: str) -> Dict[str, Any]:
+        """Determine the appropriate D3 visualization based on query results and SQL query"""
+        if not results or not isinstance(results, list):
+            return {"type": None, "reason": "No results to visualize"}
+
+        # Analyze the structure of the results
+        sample = results[0]
+        num_columns = len(sample.keys())
+        num_rows = len(results)
+        
+        # Identify column types
+        numeric_columns = []
+        temporal_columns = []
+        categorical_columns = []
+        
+        for key in sample.keys():
+            value = sample[key]
+            if isinstance(value, (int, float)):
+                numeric_columns.append(key)
+            elif isinstance(value, str):
+                # Check if it's a date string
+                if any(date_word in key.lower() for date_word in ['date', 'time', 'period']):
+                    temporal_columns.append(key)
+                else:
+                    categorical_columns.append(key)
+
+        # Analyze SQL query for hints
+        sql_lower = sql_query.lower()
+        is_count_query = 'count(' in sql_lower
+        is_group_by = 'group by' in sql_lower
+        is_time_series = any(term in sql_lower for term in ['date', 'timestamp', 'interval'])
+        
+        visualization_info = {
+            "type": None,
+            "config": {
+                "data": results,
+                "mapping": {}
+            }
+        }
+
+        # Count by category visualization (e.g., patients by city)
+        if is_count_query and is_group_by and len(categorical_columns) == 1 and len(numeric_columns) == 1:
+            if num_rows <= 10:
+                visualization_info["type"] = "bar_chart_vertical"
+                visualization_info["config"]["mapping"] = {
+                    "x": categorical_columns[0],
+                    "y": numeric_columns[0]
+                }
+            else:
+                visualization_info["type"] = "bar_chart_horizontal"
+                visualization_info["config"]["mapping"] = {
+                    "y": categorical_columns[0],
+                    "x": numeric_columns[0]
+                }
+            return visualization_info
+
+        # Time series data
+        if temporal_columns and numeric_columns and is_time_series:
+            visualization_info["type"] = "line_chart"
+            visualization_info["config"]["mapping"] = {
+                "x": temporal_columns[0],
+                "y": numeric_columns[0]
+            }
+            return visualization_info
+
+        # Distribution analysis
+        if len(numeric_columns) == 1 and num_rows > 10:
+            visualization_info["type"] = "bar_histogram"
+            visualization_info["config"]["mapping"] = {
+                "value": numeric_columns[0]
+            }
+            return visualization_info
+
+        # Categorical composition (pie chart for small number of categories)
+        if len(categorical_columns) == 1 and len(numeric_columns) == 1 and num_rows <= 8:
+            visualization_info["type"] = "pie_chart"
+            visualization_info["config"]["mapping"] = {
+                "category": categorical_columns[0],
+                "value": numeric_columns[0]
+            }
+            return visualization_info
+
+        # Relationship between two numeric variables
+        if len(numeric_columns) == 2:
+            visualization_info["type"] = "scatter_plot"
+            visualization_info["config"]["mapping"] = {
+                "x": numeric_columns[0],
+                "y": numeric_columns[1]
+            }
+            return visualization_info
+
+        # Default to vertical bar chart for simple categorical comparisons
+        if categorical_columns and numeric_columns:
+            visualization_info["type"] = "bar_chart_vertical"
+            visualization_info["config"]["mapping"] = {
+                "x": categorical_columns[0],
+                "y": numeric_columns[0]
+            }
+            return visualization_info
+
+        return visualization_info
+
     def process_question(self, user_question: str) -> Dict[str, Any]:
-        """Process user question and return results with metadata"""
+        """Process user question and return results with metadata and visualization"""
         try:
             sql_query = self.generate_sql_query(user_question)
             results = self.execute_query(sql_query)
+            
+            # Generate visualization configuration
+            visualization = self.determine_visualization(results, sql_query)
             
             return {
                 "question": user_question,
                 "sql_query": sql_query,
                 "results": results,
+                "visualization": visualization,
                 "success": True
             }
         except Exception as e:
